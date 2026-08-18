@@ -10,6 +10,8 @@
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
   <style>body{background:#f8e9ef}</style>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="supabase-config.js"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -27,13 +29,14 @@
     </aside>
 
     <main class="content">
-      <header class="topbar"><div class="mobile-brand">Fall '26 <b>command center</b></div><div class="today" id="todayLabel"></div><button class="icon-button" id="quickAdd" title="Add assignment">+</button></header>
+      <header class="topbar"><div class="mobile-brand">Fall '26 <b>command center</b></div><div class="today" id="todayLabel"></div><button class="button ghost" id="authButton">Sign in</button><button class="icon-button" id="quickAdd" title="Add assignment">+</button></header>
       <div id="app"></div>
     </main>
   </div>
 
   <dialog id="assignmentDialog" class="modal"><form method="dialog" id="assignmentForm"><div class="modal-head"><div><div class="eyebrow">New record</div><h2>Add assignment</h2></div><button class="close-button" value="cancel" aria-label="Close">×</button></div><div class="form-grid"><label>Assignment name<input name="name" required placeholder="e.g. Homework 2"></label><label>Class<select name="course" id="assignmentCourse"></select></label><label>Category<select name="category" id="assignmentCategory"></select></label><label>Due date<input name="due" type="date"></label><label>Weight (%)<input name="weight" type="number" min="0" max="100" step="0.1" placeholder="Optional"></label><label>Status<select name="status"><option value="todo">To do</option><option value="progress">In progress</option><option value="done">Done</option></select></label><label>Points earned<input name="earned" type="number" min="0" step="0.1" placeholder="Leave blank if ungraded"></label><label>Points possible<input name="possible" type="number" min="0" step="0.1" value="100"></label></div><label class="wide-label">Notes<textarea name="notes" rows="3" placeholder="What needs to happen next?"></textarea></label><div class="modal-actions"><button class="button ghost" value="cancel">Cancel</button><button class="button primary" value="default">Save assignment</button></div></form></dialog>
   <dialog id="timeDialog" class="modal"><form method="dialog" id="timeForm"><div class="modal-head"><div><div class="eyebrow">Study log</div><h2>Log time</h2></div><button class="close-button" value="cancel" aria-label="Close">×</button></div><div class="form-grid"><label>Class<select name="course" id="timeCourse"></select></label><label>Date<input name="date" type="date" required></label><label>Hours<input name="hours" type="number" min="0.25" step="0.25" required placeholder="1.5"></label><label>Focus<select name="kind"><option>Lecture / class</option><option>Homework</option><option>Reading</option><option>Project</option><option>Exam prep</option></select></label></div><label class="wide-label">Note<input name="note" placeholder="What did you work on?"></label><div class="modal-actions"><button class="button ghost" value="cancel">Cancel</button><button class="button primary" value="default">Log hours</button></div></form></dialog>
+  <dialog id="authDialog" class="modal"><form method="dialog" id="authForm"><div class="modal-head"><div><div class="eyebrow">Owner access</div><h2>Sign in to edit</h2></div><button class="close-button" value="cancel" aria-label="Close">×</button></div><label>Email<input name="email" type="email" required autocomplete="email"></label><label class="wide-label">Password<input name="password" type="password" required autocomplete="current-password"></label><p class="assignment-meta" id="authMessage">Viewers can use the site without signing in.</p><div class="modal-actions"><button class="button ghost" value="cancel">Cancel</button><button class="button primary" value="default">Sign in</button></div></form></dialog>
   <script src="app.js"></script>
 </body>
 </html>

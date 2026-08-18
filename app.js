@@ -27,6 +27,9 @@ const categoryMigrations = { '411:Homework': 'Weekly homework', '483:Prototype /
 assignments = assignments.map(item => ({ ...item, category: categoryMigrations[`${item.course}:${item.category}`] || item.category }));
 let currentView = 'overview';
 let assignmentFilter = 'all';
+const supabaseReady = window.FALL26_SUPABASE && !window.FALL26_SUPABASE.url.includes('PASTE_') && window.supabase;
+const supabaseClient = supabaseReady ? window.supabase.createClient(window.FALL26_SUPABASE.url, window.FALL26_SUPABASE.key) : null;
+let currentSession = null;
 
 const app = document.querySelector('#app');
 const moneyDate = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
@@ -43,17 +46,46 @@ document.querySelectorAll('.nav-item').forEach(button => button.addEventListener
 document.querySelector('#quickAdd').addEventListener('click', () => openAssignment());
 document.querySelector('#assignmentForm').addEventListener('submit', saveAssignment);
 document.querySelector('#timeForm').addEventListener('submit', saveTime);
+document.querySelector('#authButton').addEventListener('click', () => currentSession ? signOut() : document.querySelector('#authDialog').showModal());
+document.querySelector('#authForm').addEventListener('submit', signIn);
 document.querySelectorAll('.close-button, .modal .ghost').forEach(button => button.addEventListener('click', event => {
   event.preventDefault();
   button.closest('dialog').close();
 }));
 renderRail();
 render();
+initializeSharedData();
 
 function persist() {
   localStorage.setItem('fall26.assignments', JSON.stringify(assignments));
   localStorage.setItem('fall26.logs', JSON.stringify(logs));
 }
+async function initializeSharedData() {
+  if (!supabaseClient) return updateAuthButton();
+  const { data: sessionData } = await supabaseClient.auth.getSession();
+  currentSession = sessionData.session;
+  await loadSharedData();
+  supabaseClient.auth.onAuthStateChange(async (_event, session) => { currentSession = session; updateAuthButton(); if (session) await loadSharedData(); });
+  updateAuthButton();
+}
+async function loadSharedData() {
+  const [{ data: remoteAssignments, error: assignmentError }, { data: remoteLogs, error: logError }] = await Promise.all([
+    supabaseClient.from('assignments').select('*'),
+    supabaseClient.from('time_logs').select('*')
+  ]);
+  if (assignmentError || logError) return showSyncMessage('Supabase is connected, but the tables are not ready yet.');
+  assignments = (remoteAssignments || []).map(item => ({ ...item, course: item.course_id, due: item.due_date || '', id: item.id }));
+  logs = (remoteLogs || []).map(item => ({ ...item, course: item.course_id, date: item.log_date, id: item.id }));
+  persist(); renderRail(); render();
+}
+function updateAuthButton() { const button = document.querySelector('#authButton'); if (button) button.textContent = currentSession ? 'Sign out' : 'Sign in'; }
+function showSyncMessage(message) { const target = document.querySelector('.sidebar-bottom'); if (target && supabaseReady) target.innerHTML = `<span class="status-dot"></span> ${message}<br><span class="source-note">Local fallback remains active</span>`; }
+async function signIn(event) { event.preventDefault(); if (!supabaseClient) { document.querySelector('#authMessage').textContent = 'Add your Supabase URL and public key to supabase-config.js first.'; return; } const data = Object.fromEntries(new FormData(event.target).entries()); const { error } = await supabaseClient.auth.signInWithPassword({ email: data.email, password: data.password }); document.querySelector('#authMessage').textContent = error ? error.message : 'Signed in. Shared editing is enabled.'; if (!error) document.querySelector('#authDialog').close(); }
+async function signOut() { await supabaseClient.auth.signOut(); currentSession = null; updateAuthButton(); }
+function assignmentPayload(item) { return { id: item.id, course_id: item.course, name: item.name, category: item.category, due_date: item.due || null, weight: Number(item.weight) || 0, status: item.status, earned: item.earned === '' ? null : Number(item.earned), possible: Number(item.possible) || 100, notes: item.notes || '' }; }
+function logPayload(item) { return { id: item.id, course_id: item.course, log_date: item.date, hours: Number(item.hours), kind: item.kind, note: item.note || '' }; }
+async function syncSharedData() { if (!supabaseClient || !currentSession) return; const { error } = await supabaseClient.from('assignments').upsert(assignments.map(assignmentPayload)); if (error) showSyncMessage(error.message); else await supabaseClient.from('time_logs').upsert(logs.map(logPayload)); }
+async function deleteShared(table, id) { if (!supabaseClient || !currentSession) return; await supabaseClient.from(table).delete().eq('id', id); }
 function courseById(id) { return courses.find(course => course.id === id); }
 function courseOptions() { return courses.map(course => `<option value="${course.id}">${course.code} - ${course.name}</option>`).join(''); }
 function updateCategoryOptions() {
@@ -68,7 +100,7 @@ function navigate(view) {
 function renderRail() {
   document.querySelector('#courseRail').innerHTML = courses.map(course => `<div class="rail-course"><i class="course-dot" style="background:${course.color}"></i>${course.code}<span class="source-tag">${assignments.filter(item => item.course === course.id && item.status !== 'done').length} open</span></div>`).join('');
 }
-function save() { persist(); renderRail(); render(); }
+function save() { persist(); renderRail(); render(); syncSharedData(); }
 function formatDue(date) { return date ? moneyDate.format(new Date(`${date}T12:00:00`)) : 'TBD'; }
 function daysUntil(date) { return date ? Math.ceil((new Date(`${date}T12:00:00`) - today) / 86400000) : 999; }
 function categoryScore(course, category, entries) {
@@ -123,7 +155,7 @@ function renderAssignments() {
 }
 function bindDynamic() {
   document.querySelectorAll('.edit-assignment').forEach(button => button.addEventListener('click', () => openAssignment(button.dataset.id)));
-  document.querySelectorAll('.delete-assignment').forEach(button => button.addEventListener('click', () => { assignments = assignments.filter(item => item.id !== button.dataset.id); save(); }));
+  document.querySelectorAll('.delete-assignment').forEach(button => button.addEventListener('click', () => { assignments = assignments.filter(item => item.id !== button.dataset.id); deleteShared('assignments', button.dataset.id); save(); }));
 }
 function renderGrades() {
   app.innerHTML = `<div class="page">${header('Gradebook', 'Grades', 'Only graded work counts toward the current grade. Empty categories are excluded until you enter a score.', '<button class="button primary" id="gradeAdd">+ Add graded work</button>')}<div class="table-wrap"><table><thead><tr><th>Course</th><th>Current grade</th><th>Graded weight</th><th>Category breakdown</th><th>Open work</th></tr></thead><tbody>${courses.map(course => { const mine = assignments.filter(item => item.course === course.id); const graded = mine.filter(item => item.earned !== '' && item.earned !== null && Number(item.possible) > 0); const activeWeight = course.categories.filter(category => graded.some(item => item.category === category)).reduce((sum, category) => sum + course.weights[category], 0); const categories = course.categories.map(category => { const score = categoryScore(course, category, graded); if (score === null) return `<span class="grade-muted">${category} (${course.weights[category]}%): --</span>`; const dropNote = course.drops?.[category] ? `, drops ${course.drops[category]}` : ''; return `<span>${category} (${course.weights[category]}%${dropNote}): ${score.toFixed(0)}%</span>`; }).join('<br>'); return `<tr><td><div class="log-course"><i class="course-dot" style="background:${course.color};display:inline-block;margin-right:7px"></i>${course.code}</div><div class="assignment-meta">${course.name}</div></td><td><div class="grade-number ${courseGrade(course.id) === null ? 'grade-muted' : ''}">${courseGrade(course.id) === null ? '--' : `${courseGrade(course.id).toFixed(1)}%`}</div></td><td>${activeWeight ? `${activeWeight}% of course` : '--'}<div class="grade-bar"><span style="width:${Math.min(activeWeight, 100)}%"></span></div></td><td>${categories}</td><td>${mine.filter(item => item.status !== 'done').length}</td></tr>`; }).join('')}</tbody></table></div></div>`;
@@ -136,7 +168,7 @@ function renderTimesheet() {
   const max = Math.max(...days.map(day => day.hours), 2);
   app.innerHTML = `<div class="page">${header('Study rhythm', 'Time sheet', 'Log the work behind the grades. A small, honest record makes uneven weeks visible before they become stressful.', '<button class="button primary" id="timeAdd">+ Log time</button>')}<div class="time-summary"><div class="time-total"><div class="stat-label">All logged time</div><strong>${total.toFixed(1)}h</strong></div><div class="time-total"><div class="stat-label">This week</div><strong>${days.reduce((sum, day) => sum + day.hours, 0).toFixed(1)}h</strong></div></div><div class="section-head"><h2>Last 7 days</h2></div><div class="bar-chart">${days.map(day => `<div class="bar-day"><span class="bar-hours">${day.hours ? `${day.hours}h` : ''}</span><div class="bar-fill" style="height:${Math.max(day.hours / max * 125, 3)}px"></div><span>${day.label}</span></div>`).join('')}</div><div class="section-head" style="margin-top:34px"><h2>Recent entries</h2><span class="source-note">${logs.length} total logs</span></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Class</th><th>Focus</th><th>Hours</th><th>Note</th><th></th></tr></thead><tbody>${logs.slice().sort((a, b) => b.date.localeCompare(a.date)).map(log => { const course = courseById(log.course); return `<tr><td>${formatDue(log.date)}</td><td><span class="log-course"><i class="course-dot" style="background:${course.color};display:inline-block;margin-right:7px"></i>${course.code}</span></td><td>${log.kind}</td><td><b>${Number(log.hours).toFixed(2)}h</b></td><td>${log.note || '--'}</td><td><button class="delete-button" data-log="${log.id}" aria-label="Delete log">×</button></td></tr>`; }).join('') || '<tr><td colspan="6" class="empty">No time logged yet.</td></tr>'}</tbody></table></div></div>`;
   document.querySelector('#timeAdd').addEventListener('click', () => document.querySelector('#timeDialog').showModal());
-  document.querySelectorAll('[data-log]').forEach(button => button.addEventListener('click', () => { logs = logs.filter(log => log.id !== button.dataset.log); save(); }));
+  document.querySelectorAll('[data-log]').forEach(button => button.addEventListener('click', () => { logs = logs.filter(log => log.id !== button.dataset.log); deleteShared('time_logs', button.dataset.log); save(); }));
 }
 function openAssignment(id = '') {
   const form = document.querySelector('#assignmentForm'); form.reset(); form.dataset.editId = id; updateCategoryOptions();
