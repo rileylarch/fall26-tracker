@@ -79,7 +79,7 @@ async function loadSharedData() {
   if (assignmentError || logError) return showSyncMessage('Supabase is connected, but the tables are not ready yet.');
   if (!remoteAssignments?.length && currentSession && localAssignments.length) await supabaseClient.from('assignments').upsert(localAssignments.map(assignmentPayload));
   if (!remoteLogs?.length && currentSession && localLogs.length) await supabaseClient.from('time_logs').upsert(localLogs.map(logPayload));
-  assignments = remoteAssignments?.length ? remoteAssignments.map(item => ({ ...item, course: item.course_id, due: item.due_date || '', id: item.id, weight: assignmentWeight(item.course_id, item.category) })) : localAssignments;
+  assignments = remoteAssignments?.length ? remoteAssignments.map(item => ({ ...item, course: item.course_id, due: item.due_date || '', id: item.id, weight: assignmentWeight(item.course_id, item.category) || Number(item.weight) || 0 })) : localAssignments;
   logs = remoteLogs?.length ? remoteLogs.map(item => ({ ...item, course: item.course_id, date: item.log_date, id: item.id })) : localLogs;
   persist(); renderRail(); render();
 }
@@ -192,16 +192,19 @@ function renderTimesheet() {
   document.querySelectorAll('[data-log]').forEach(button => button.addEventListener('click', () => { logs = logs.filter(log => log.id !== button.dataset.log); deleteShared('time_logs', button.dataset.log); save(); }));
 }
 function openAssignment(id = '') {
-  const form = document.querySelector('#assignmentForm'); form.reset(); form.dataset.editId = id; updateCategoryOptions();
+  const form = document.querySelector('#assignmentForm'); form.reset(); form.dataset.editId = id;
   const item = assignments.find(assignment => assignment.id === id);
-  if (item) Object.entries(item).forEach(([key, value]) => { if (form.elements[key]) form.elements[key].value = value; });
-  form.elements.weight.value = assignmentWeight(form.elements.course.value, form.elements.category.value);
+  form.elements.course.value = item?.course || '302';
+  updateCategoryOptions();
+  if (item && courseById(item.course)?.categories.includes(item.category)) form.elements.category.value = item.category;
+  form.elements.weight.value = assignmentWeight(form.elements.course.value, form.elements.category.value) || Number(item?.weight) || 0;
+  if (item) ['name', 'due', 'status', 'earned', 'possible', 'notes'].forEach(key => { if (form.elements[key]) form.elements[key].value = item[key] ?? ''; });
   document.querySelector('#assignmentDialog').showModal();
 }
 function saveAssignment(event) {
   event.preventDefault(); const form = event.target; const data = Object.fromEntries(new FormData(form).entries());
   const existing = assignments.find(item => item.id === form.dataset.editId);
-  const item = { ...data, id: existing?.id || `a${Date.now()}`, weight: assignmentWeight(data.course, data.category), possible: Number(data.possible) || 100 };
+  const item = { ...data, id: existing?.id || `a${Date.now()}`, weight: assignmentWeight(data.course, data.category) || Number(existing?.weight) || 0, possible: Number(data.possible) || 100 };
   if (existing) assignments = assignments.map(entry => entry.id === existing.id ? item : entry); else assignments.push(item);
   document.querySelector('#assignmentDialog').close(); save();
 }
