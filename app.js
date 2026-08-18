@@ -24,7 +24,7 @@ const seedLogs = [
 let assignments = JSON.parse(localStorage.getItem('fall26.assignments') || 'null') || seedAssignments;
 let logs = JSON.parse(localStorage.getItem('fall26.logs') || 'null') || seedLogs;
 const categoryMigrations = { '411:Homework': 'Weekly homework', '483:Prototype / plans': 'Product Development Plan', '483:Reading': 'Book Reading', '483:Presentations': 'Prototype Demo 1', '483:Final pitch': 'Final PitchDeck' };
-assignments = assignments.map(item => ({ ...item, category: categoryMigrations[`${item.course}:${item.category}`] || item.category }));
+assignments = assignments.map(item => { const category = categoryMigrations[`${item.course}:${item.category}`] || item.category; return { ...item, category, weight: assignmentWeight(item.course, category) }; });
 let currentView = 'overview';
 let assignmentFilter = 'all';
 const supabaseReady = window.FALL26_SUPABASE && !window.FALL26_SUPABASE.url.includes('PASTE_') && window.supabase;
@@ -40,6 +40,7 @@ document.querySelector('#todayLabel').textContent = fullDate.format(today);
 document.querySelector('#assignmentCourse').innerHTML = courseOptions();
 document.querySelector('#timeCourse').innerHTML = courseOptions();
 document.querySelector('#assignmentCourse').addEventListener('change', updateCategoryOptions);
+document.querySelector('#assignmentCategory').addEventListener('change', updateCategoryOptions);
 updateCategoryOptions();
 
 document.querySelectorAll('.nav-item').forEach(button => button.addEventListener('click', () => navigate(button.dataset.view)));
@@ -74,7 +75,7 @@ async function loadSharedData() {
     supabaseClient.from('time_logs').select('*')
   ]);
   if (assignmentError || logError) return showSyncMessage('Supabase is connected, but the tables are not ready yet.');
-  assignments = (remoteAssignments || []).map(item => ({ ...item, course: item.course_id, due: item.due_date || '', id: item.id }));
+  assignments = (remoteAssignments || []).map(item => ({ ...item, course: item.course_id, due: item.due_date || '', id: item.id, weight: assignmentWeight(item.course_id, item.category) }));
   logs = (remoteLogs || []).map(item => ({ ...item, course: item.course_id, date: item.log_date, id: item.id }));
   persist(); renderRail(); render();
 }
@@ -88,9 +89,11 @@ async function syncSharedData() { if (!supabaseClient || !currentSession) return
 async function deleteShared(table, id) { if (!supabaseClient || !currentSession) return; await supabaseClient.from(table).delete().eq('id', id); }
 function courseById(id) { return courses.find(course => course.id === id); }
 function courseOptions() { return courses.map(course => `<option value="${course.id}">${course.code} - ${course.name}</option>`).join(''); }
+function assignmentWeight(courseId, category) { return Number(courseById(courseId)?.weights?.[category] || 0); }
 function updateCategoryOptions() {
   const course = courseById(document.querySelector('#assignmentCourse').value || '302');
   document.querySelector('#assignmentCategory').innerHTML = course.categories.map(category => `<option>${category}</option>`).join('');
+  document.querySelector('#assignmentForm [name="weight"]').value = assignmentWeight(course.id, document.querySelector('#assignmentCategory').value);
 }
 function navigate(view) {
   currentView = view;
@@ -174,12 +177,13 @@ function openAssignment(id = '') {
   const form = document.querySelector('#assignmentForm'); form.reset(); form.dataset.editId = id; updateCategoryOptions();
   const item = assignments.find(assignment => assignment.id === id);
   if (item) Object.entries(item).forEach(([key, value]) => { if (form.elements[key]) form.elements[key].value = value; });
+  form.elements.weight.value = assignmentWeight(form.elements.course.value, form.elements.category.value);
   document.querySelector('#assignmentDialog').showModal();
 }
 function saveAssignment(event) {
   event.preventDefault(); const form = event.target; const data = Object.fromEntries(new FormData(form).entries());
   const existing = assignments.find(item => item.id === form.dataset.editId);
-  const item = { ...data, id: existing?.id || `a${Date.now()}`, weight: Number(data.weight) || 0, possible: Number(data.possible) || 100 };
+  const item = { ...data, id: existing?.id || `a${Date.now()}`, weight: assignmentWeight(data.course, data.category), possible: Number(data.possible) || 100 };
   if (existing) assignments = assignments.map(entry => entry.id === existing.id ? item : entry); else assignments.push(item);
   document.querySelector('#assignmentDialog').close(); save();
 }
