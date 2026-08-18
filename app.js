@@ -28,7 +28,7 @@ assignments = assignments.map(item => { const category = categoryMigrations[`${i
 let currentView = 'overview';
 let assignmentFilter = 'all';
 const supabaseReady = window.FALL26_SUPABASE && !window.FALL26_SUPABASE.url.includes('PASTE_') && window.supabase;
-const supabaseClient = supabaseReady ? window.supabase.createClient(window.FALL26_SUPABASE.url, window.FALL26_SUPABASE.key) : null;
+const supabaseClient = supabaseReady ? window.supabase.createClient(window.FALL26_SUPABASE.url, window.FALL26_SUPABASE.key, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } }) : null;
 let currentSession = null;
 
 const app = document.querySelector('#app');
@@ -70,13 +70,17 @@ async function initializeSharedData() {
   updateAuthButton();
 }
 async function loadSharedData() {
+  const localAssignments = assignments.slice();
+  const localLogs = logs.slice();
   const [{ data: remoteAssignments, error: assignmentError }, { data: remoteLogs, error: logError }] = await Promise.all([
     supabaseClient.from('assignments').select('*'),
     supabaseClient.from('time_logs').select('*')
   ]);
   if (assignmentError || logError) return showSyncMessage('Supabase is connected, but the tables are not ready yet.');
-  assignments = (remoteAssignments || []).map(item => ({ ...item, course: item.course_id, due: item.due_date || '', id: item.id, weight: assignmentWeight(item.course_id, item.category) }));
-  logs = (remoteLogs || []).map(item => ({ ...item, course: item.course_id, date: item.log_date, id: item.id }));
+  if (!remoteAssignments?.length && currentSession && localAssignments.length) await supabaseClient.from('assignments').upsert(localAssignments.map(assignmentPayload));
+  if (!remoteLogs?.length && currentSession && localLogs.length) await supabaseClient.from('time_logs').upsert(localLogs.map(logPayload));
+  assignments = remoteAssignments?.length ? remoteAssignments.map(item => ({ ...item, course: item.course_id, due: item.due_date || '', id: item.id, weight: assignmentWeight(item.course_id, item.category) })) : localAssignments;
+  logs = remoteLogs?.length ? remoteLogs.map(item => ({ ...item, course: item.course_id, date: item.log_date, id: item.id })) : localLogs;
   persist(); renderRail(); render();
 }
 function updateAuthButton() { const button = document.querySelector('#authButton'); if (button) button.textContent = currentSession ? 'Sign out' : 'Sign in'; }
