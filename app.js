@@ -40,7 +40,7 @@ document.querySelector('#todayLabel').textContent = fullDate.format(today);
 document.querySelector('#assignmentCourse').innerHTML = courseOptions();
 document.querySelector('#timeCourse').innerHTML = courseOptions();
 document.querySelector('#assignmentCourse').addEventListener('change', updateCategoryOptions);
-document.querySelector('#assignmentCategory').addEventListener('change', updateCategoryOptions);
+document.querySelector('#assignmentCategory').addEventListener('change', updateAssignmentWeight);
 updateCategoryOptions();
 
 document.querySelectorAll('.nav-item').forEach(button => button.addEventListener('click', () => navigate(button.dataset.view)));
@@ -97,7 +97,11 @@ function assignmentWeight(courseId, category) { return Number(courseById(courseI
 function updateCategoryOptions() {
   const course = courseById(document.querySelector('#assignmentCourse').value || '302');
   document.querySelector('#assignmentCategory').innerHTML = course.categories.map(category => `<option>${category}</option>`).join('');
-  document.querySelector('#assignmentForm [name="weight"]').value = assignmentWeight(course.id, document.querySelector('#assignmentCategory').value);
+  updateAssignmentWeight();
+}
+function updateAssignmentWeight() {
+  const courseId = document.querySelector('#assignmentCourse').value || '302';
+  document.querySelector('#assignmentForm [name="weight"]').value = assignmentWeight(courseId, document.querySelector('#assignmentCategory').value);
 }
 function navigate(view) {
   currentView = view;
