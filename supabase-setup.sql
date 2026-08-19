@@ -28,6 +28,16 @@ create table if not exists public.time_logs (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.todos (
+  id text primary key,
+  text text not null,
+  todo_date date not null,
+  done boolean not null default false,
+  carried boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists public.app_admins (
   user_id uuid primary key references auth.users(id) on delete cascade
 );
@@ -38,21 +48,29 @@ on conflict (user_id) do nothing;
 
 alter table public.assignments enable row level security;
 alter table public.time_logs enable row level security;
+alter table public.todos enable row level security;
 alter table public.app_admins enable row level security;
 
 drop policy if exists "Anyone can view assignments" on public.assignments;
 drop policy if exists "Anyone can view time logs" on public.time_logs;
+drop policy if exists "Anyone can view todos" on public.todos;
 drop policy if exists "Only owner can insert assignments" on public.assignments;
 drop policy if exists "Only owner can update assignments" on public.assignments;
 drop policy if exists "Only owner can delete assignments" on public.assignments;
 drop policy if exists "Only owner can insert time logs" on public.time_logs;
 drop policy if exists "Only owner can update time logs" on public.time_logs;
 drop policy if exists "Only owner can delete time logs" on public.time_logs;
+drop policy if exists "Only owner can insert todos" on public.todos;
+drop policy if exists "Only owner can update todos" on public.todos;
+drop policy if exists "Only owner can delete todos" on public.todos;
 drop policy if exists "Users can check their own admin status" on public.app_admins;
 
 create policy "Anyone can view assignments" on public.assignments
 for select to anon, authenticated using (true);
 create policy "Anyone can view time logs" on public.time_logs
+for select to anon, authenticated using (true);
+
+create policy "Anyone can view todos" on public.todos
 for select to anon, authenticated using (true);
 
 create policy "Only owner can insert assignments" on public.assignments
@@ -69,6 +87,14 @@ create policy "Only owner can update time logs" on public.time_logs
 for update to authenticated using (exists (select 1 from public.app_admins where user_id = auth.uid()))
 with check (exists (select 1 from public.app_admins where user_id = auth.uid()));
 create policy "Only owner can delete time logs" on public.time_logs
+for delete to authenticated using (exists (select 1 from public.app_admins where user_id = auth.uid()));
+
+create policy "Only owner can insert todos" on public.todos
+for insert to authenticated with check (exists (select 1 from public.app_admins where user_id = auth.uid()));
+create policy "Only owner can update todos" on public.todos
+for update to authenticated using (exists (select 1 from public.app_admins where user_id = auth.uid()))
+with check (exists (select 1 from public.app_admins where user_id = auth.uid()));
+create policy "Only owner can delete todos" on public.todos
 for delete to authenticated using (exists (select 1 from public.app_admins where user_id = auth.uid()));
 
 create policy "Users can check their own admin status" on public.app_admins

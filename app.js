@@ -23,8 +23,10 @@ const seedLogs = [
 
 let assignments = JSON.parse(localStorage.getItem('fall26.assignments') || 'null') || seedAssignments;
 let logs = JSON.parse(localStorage.getItem('fall26.logs') || 'null') || seedLogs;
+let todos = JSON.parse(localStorage.getItem('fall26.todos') || 'null') || [];
 const categoryMigrations = { '411:Homework': 'Weekly homework', '483:Prototype / plans': 'Product Development Plan', '483:Reading': 'Book Reading', '483:Presentations': 'Prototype Demo 1', '483:Final pitch': 'Final PitchDeck' };
 assignments = assignments.map(item => { const category = categoryMigrations[`${item.course}:${item.category}`] || item.category; return { ...item, category, weight: assignmentWeight(item.course, category) }; });
+todos = todos.map(item => ({ ...item, date: item.date || '', carried: Boolean(item.carried) }));
 let currentView = 'overview';
 let assignmentFilter = 'all';
 const supabaseReady = window.FALL26_SUPABASE && !window.FALL26_SUPABASE.url.includes('PASTE_') && window.supabase;
@@ -60,6 +62,7 @@ initializeSharedData();
 function persist() {
   localStorage.setItem('fall26.assignments', JSON.stringify(assignments));
   localStorage.setItem('fall26.logs', JSON.stringify(logs));
+  localStorage.setItem('fall26.todos', JSON.stringify(todos));
 }
 async function initializeSharedData() {
   if (!supabaseClient) return updateAuthButton();
@@ -72,15 +75,19 @@ async function initializeSharedData() {
 async function loadSharedData() {
   const localAssignments = assignments.slice();
   const localLogs = logs.slice();
-  const [{ data: remoteAssignments, error: assignmentError }, { data: remoteLogs, error: logError }] = await Promise.all([
+  const localTodos = todos.slice();
+  const [{ data: remoteAssignments, error: assignmentError }, { data: remoteLogs, error: logError }, { data: remoteTodos, error: todoError }] = await Promise.all([
     supabaseClient.from('assignments').select('*'),
-    supabaseClient.from('time_logs').select('*')
+    supabaseClient.from('time_logs').select('*'),
+    supabaseClient.from('todos').select('*')
   ]);
-  if (assignmentError || logError) return showSyncMessage('Supabase is connected, but the tables are not ready yet.');
+  if (assignmentError || logError || todoError) return showSyncMessage('Supabase is connected, but the tables are not ready yet.');
   if (!remoteAssignments?.length && currentSession && localAssignments.length) await supabaseClient.from('assignments').upsert(localAssignments.map(assignmentPayload));
   if (!remoteLogs?.length && currentSession && localLogs.length) await supabaseClient.from('time_logs').upsert(localLogs.map(logPayload));
+  if (!remoteTodos?.length && currentSession && localTodos.length) await supabaseClient.from('todos').upsert(localTodos.map(todoPayload));
   assignments = remoteAssignments?.length ? remoteAssignments.map(item => ({ ...item, course: item.course_id, due: item.due_date || '', id: item.id, scoreEntered: Number(item.earned) !== 0 && item.earned !== null, weight: assignmentWeight(item.course_id, item.category) || Number(item.weight) || 0 })) : localAssignments;
   logs = remoteLogs?.length ? remoteLogs.map(item => ({ ...item, course: item.course_id, date: item.log_date, id: item.id })) : localLogs;
+  todos = remoteTodos?.length ? remoteTodos.map(item => ({ ...item, date: item.todo_date, carried: Boolean(item.carried) })) : localTodos;
   persist(); renderRail(); render();
 }
 function updateAuthButton() { const button = document.querySelector('#authButton'); if (button) button.textContent = currentSession ? 'Sign out' : 'Sign in'; }
@@ -90,12 +97,15 @@ async function signOut() { await supabaseClient.auth.signOut(); currentSession =
 function hasEarnedScore(item) { return item.earned !== '' && item.earned !== null && item.earned !== undefined && Number.isFinite(Number(item.earned)) && (Number(item.earned) !== 0 || item.scoreEntered === true); }
 function assignmentPayload(item) { return { id: item.id, course_id: item.course, name: item.name, category: item.category, due_date: item.due || null, weight: Number(item.weight) || 0, status: item.status, earned: hasEarnedScore(item) ? Number(item.earned) : null, possible: Number(item.possible) || 100, notes: item.notes || '' }; }
 function logPayload(item) { return { id: item.id, course_id: item.course, log_date: item.date, hours: Number(item.hours), kind: item.kind, note: item.note || '' }; }
+function todoPayload(item) { return { id: item.id, text: item.text, todo_date: item.date || today.toISOString().slice(0, 10), done: Boolean(item.done), carried: Boolean(item.carried) }; }
 async function syncSharedData() {
   if (!supabaseClient || !currentSession) return;
   const { error: assignmentError } = await supabaseClient.from('assignments').upsert(assignments.map(assignmentPayload), { onConflict: 'id' });
   if (assignmentError) { showSyncMessage(`Assignment sync failed: ${assignmentError.message}`); return; }
   const { error: logError } = await supabaseClient.from('time_logs').upsert(logs.map(logPayload), { onConflict: 'id' });
   if (logError) { showSyncMessage(`Time log sync failed: ${logError.message}`); return; }
+  const { error: todoError } = await supabaseClient.from('todos').upsert(todos.map(todoPayload), { onConflict: 'id' });
+  if (todoError) { showSyncMessage(`To-do sync failed: ${todoError.message}`); return; }
   showSyncMessage('All changes synced to Supabase.');
 }
 async function deleteShared(table, id) { if (!supabaseClient || !currentSession) return; await supabaseClient.from(table).delete().eq('id', id); }
@@ -120,6 +130,27 @@ function renderRail() {
   document.querySelector('#courseRail').innerHTML = courses.map(course => `<div class="rail-course"><i class="course-dot" style="background:${course.color}"></i>${course.code}<span class="source-tag">${assignments.filter(item => item.course === course.id && item.status !== 'done').length} open</span></div>`).join('');
 }
 function save() { persist(); renderRail(); render(); syncSharedData(); }
+function escapeHTML(value) { return String(value).replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[character])); }
+function prepareTodos() {
+  const todayKey = today.toISOString().slice(0, 10);
+  let changed = false;
+  todos = todos.map(item => {
+    if (!item.done && item.date < todayKey) { changed = true; return { ...item, date: todayKey, carried: true }; }
+    return item;
+  });
+  if (changed) persist();
+}
+function todoList() {
+  prepareTodos();
+  const todayKey = today.toISOString().slice(0, 10);
+  const items = todos.filter(item => item.date === todayKey);
+  return `<section class="section todo-section"><div class="section-head"><div><h2>Today's to-do list</h2><span class="source-note">Unfinished items carry forward automatically</span></div><span class="todo-count">${items.filter(item => !item.done).length} open</span></div><form class="todo-form" id="todoForm"><input name="text" required placeholder="Add something to get done today..." aria-label="New to-do"><button class="button primary" type="submit">Add</button></form><div class="todo-list">${items.map(item => `<div class="todo-item ${item.done ? 'done' : ''} ${item.carried ? 'carried' : ''}"><label><input type="checkbox" data-todo="${item.id}" ${item.done ? 'checked' : ''}><span>${escapeHTML(item.text)}</span></label><button class="delete-button" data-delete-todo="${item.id}" aria-label="Delete to-do">×</button>${item.carried && !item.done ? '<small>Carried over from yesterday</small>' : ''}</div>`).join('') || '<div class="empty">Your list is clear. Add the first thing you want to finish.</div>'}</div></section>`;
+}
+function bindTodos() {
+  document.querySelector('#todoForm').addEventListener('submit', event => { event.preventDefault(); const text = new FormData(event.target).get('text').trim(); if (!text) return; todos.push({ id: `todo${Date.now()}`, text, date: today.toISOString().slice(0, 10), done: false, carried: false }); save(); });
+  document.querySelectorAll('[data-todo]').forEach(input => input.addEventListener('change', event => { todos = todos.map(item => item.id === event.target.dataset.todo ? { ...item, done: event.target.checked } : item); save(); }));
+  document.querySelectorAll('[data-delete-todo]').forEach(button => button.addEventListener('click', () => { const id = button.dataset.deleteTodo; todos = todos.filter(item => item.id !== id); deleteShared('todos', id); save(); }));
+}
 function formatDue(date) { return date ? moneyDate.format(new Date(`${date}T12:00:00`)) : 'TBD'; }
 function daysUntil(date) { return date ? Math.ceil((new Date(`${date}T12:00:00`) - today) / 86400000) : 999; }
 function categoryScore(course, category, entries) {
@@ -171,9 +202,10 @@ function renderOverview() {
   const hours = logs.reduce((sum, item) => sum + Number(item.hours), 0);
   const graded = courses.map(course => courseGrade(course.id)).filter(Boolean);
   const average = graded.length ? graded.reduce((sum, value) => sum + value, 0) / graded.length : null;
-  app.innerHTML = `<div class="page">${header('Tuesday / August 18, 2026', 'Your semester, in one place.', 'A calm view of what is due, how your grades are moving, and where your time is going.', '<button class="button primary" id="overviewAdd">+ Add assignment</button>')}<div class="stats"><div class="stat"><div class="stat-label">Open assignments</div><div class="stat-value">${open.length}</div></div><div class="stat"><div class="stat-label">Current average</div><div class="stat-value">${average ? `${average.toFixed(1)}%` : '--'}</div></div><div class="stat"><div class="stat-label">Logged this term</div><div class="stat-value">${hours.toFixed(1)}h</div></div><div class="stat"><div class="stat-label">Completed</div><div class="stat-value">${assignments.length ? Math.round(assignments.filter(item => item.status === 'done').length / assignments.length * 100) : 0}%</div></div></div>${weeklyCalendar()}<div class="split"><section class="section"><div class="section-head"><h2>Next on your radar</h2><button class="text-button" data-action="navigate" data-view="assignments">View all</button></div>${upcoming().map(item => assignmentCard(item, true)).join('') || '<div class="empty">Nothing waiting. Add your first assignment.</div>'}</section><section class="section"><div class="section-head"><h2>Course pulse</h2><button class="text-button" data-action="navigate" data-view="grades">Open grades</button></div><div class="course-cards">${courses.map(course => `<div class="course-card"><div class="course-card-top"><div class="course-code">${course.code}</div><i class="course-dot" style="background:${course.color}"></i></div><div class="course-name">${course.name}</div><div class="progress-line"><span style="width:${completion(course.id)}%"></span></div><div class="course-footer"><span>${completion(course.id)}% complete</span><span class="progress-number">${courseGrade(course.id) ? `${courseGrade(course.id).toFixed(1)}%` : '--'}</span></div></div>`).join('')}</div></section></div></div>`;
+  app.innerHTML = `<div class="page">${header('Tuesday / August 18, 2026', 'Your semester, in one place.', 'A calm view of what is due, how your grades are moving, and where your time is going.', '<button class="button primary" id="overviewAdd">+ Add assignment</button>')}<div class="stats"><div class="stat"><div class="stat-label">Open assignments</div><div class="stat-value">${open.length}</div></div><div class="stat"><div class="stat-label">Current average</div><div class="stat-value">${average ? `${average.toFixed(1)}%` : '--'}</div></div><div class="stat"><div class="stat-label">Logged this term</div><div class="stat-value">${hours.toFixed(1)}h</div></div><div class="stat"><div class="stat-label">Completed</div><div class="stat-value">${assignments.length ? Math.round(assignments.filter(item => item.status === 'done').length / assignments.length * 100) : 0}%</div></div></div>${weeklyCalendar()}<div class="split"><section class="section"><div class="section-head"><h2>Next on your radar</h2><button class="text-button" data-action="navigate" data-view="assignments">View all</button></div>${upcoming().map(item => assignmentCard(item, true)).join('') || '<div class="empty">Nothing waiting. Add your first assignment.</div>'}</section>${todoList()}</div></div>`;
   document.querySelector('#overviewAdd').addEventListener('click', () => openAssignment());
   document.querySelectorAll('[data-calendar-assignment]').forEach(button => button.addEventListener('click', () => openAssignment(button.dataset.calendarAssignment)));
+  bindTodos();
 }
 function renderAssignments() {
   const visible = assignments.filter(item => assignmentFilter === 'all' || item.course === assignmentFilter).sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999'));
