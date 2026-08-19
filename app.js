@@ -84,12 +84,19 @@ async function loadSharedData() {
   persist(); renderRail(); render();
 }
 function updateAuthButton() { const button = document.querySelector('#authButton'); if (button) button.textContent = currentSession ? 'Sign out' : 'Sign in'; }
-function showSyncMessage(message) { const target = document.querySelector('.sidebar-bottom'); if (target && supabaseReady) target.innerHTML = `<span class="status-dot"></span> ${message}<br><span class="source-note">Local fallback remains active</span>`; }
+function showSyncMessage(message) { const target = document.querySelector('.sidebar-bottom'); if (target && supabaseReady) target.innerHTML = `<span class="status-dot"></span> ${message}<br><span class="source-note">Shared data status</span>`; }
 async function signIn(event) { event.preventDefault(); if (!supabaseClient) { const message = !window.FALL26_SUPABASE || window.FALL26_SUPABASE.url.includes('PASTE_') ? 'Add your Supabase URL and public key to supabase-config.js first.' : 'The Supabase browser library did not load. Refresh the page, then try again.'; document.querySelector('#authMessage').textContent = message; return; } const data = Object.fromEntries(new FormData(event.target).entries()); const { error } = await supabaseClient.auth.signInWithPassword({ email: data.email, password: data.password }); document.querySelector('#authMessage').textContent = error ? error.message : 'Signed in. Shared editing is enabled.'; if (!error) document.querySelector('#authDialog').close(); }
 async function signOut() { await supabaseClient.auth.signOut(); currentSession = null; updateAuthButton(); }
 function assignmentPayload(item) { return { id: item.id, course_id: item.course, name: item.name, category: item.category, due_date: item.due || null, weight: Number(item.weight) || 0, status: item.status, earned: item.earned === '' ? null : Number(item.earned), possible: Number(item.possible) || 100, notes: item.notes || '' }; }
 function logPayload(item) { return { id: item.id, course_id: item.course, log_date: item.date, hours: Number(item.hours), kind: item.kind, note: item.note || '' }; }
-async function syncSharedData() { if (!supabaseClient || !currentSession) return; const { error } = await supabaseClient.from('assignments').upsert(assignments.map(assignmentPayload)); if (error) showSyncMessage(error.message); else await supabaseClient.from('time_logs').upsert(logs.map(logPayload)); }
+async function syncSharedData() {
+  if (!supabaseClient || !currentSession) return;
+  const { error: assignmentError } = await supabaseClient.from('assignments').upsert(assignments.map(assignmentPayload), { onConflict: 'id' });
+  if (assignmentError) { showSyncMessage(`Assignment sync failed: ${assignmentError.message}`); return; }
+  const { error: logError } = await supabaseClient.from('time_logs').upsert(logs.map(logPayload), { onConflict: 'id' });
+  if (logError) { showSyncMessage(`Time log sync failed: ${logError.message}`); return; }
+  showSyncMessage('All changes synced to Supabase.');
+}
 async function deleteShared(table, id) { if (!supabaseClient || !currentSession) return; await supabaseClient.from(table).delete().eq('id', id); }
 function courseById(id) { return courses.find(course => course.id === id); }
 function courseOptions() { return courses.map(course => `<option value="${course.id}">${course.code} - ${course.name}</option>`).join(''); }
