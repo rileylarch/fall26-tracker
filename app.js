@@ -222,12 +222,40 @@ function renderGrades() {
   app.innerHTML = `<div class="page">${header('Gradebook', 'Grades', 'Only graded work counts toward the current grade. Empty categories are excluded until you enter a score.', '<button class="button primary" id="gradeAdd">+ Add graded work</button>')}<div class="table-wrap"><table><thead><tr><th>Course</th><th>Current grade</th><th>Graded weight</th><th>Category breakdown</th><th>Open work</th></tr></thead><tbody>${courses.map(course => { const mine = assignments.filter(item => item.course === course.id); const graded = mine.filter(item => hasEarnedScore(item) && Number(item.possible) > 0); const activeWeight = course.categories.filter(category => graded.some(item => item.category === category)).reduce((sum, category) => sum + course.weights[category], 0); const categories = course.categories.map(category => { const score = categoryScore(course, category, graded); if (score === null) return `<span class="grade-muted">${category} (${course.weights[category]}%): --</span>`; const dropNote = course.drops?.[category] ? `, drops ${course.drops[category]}` : ''; return `<span>${category} (${course.weights[category]}%${dropNote}): ${score.toFixed(0)}%</span>`; }).join('<br>'); return `<tr><td><div class="log-course"><i class="course-dot" style="background:${course.color};display:inline-block;margin-right:7px"></i>${course.code}</div><div class="assignment-meta">${course.name}</div></td><td><div class="grade-number ${courseGrade(course.id) === null ? 'grade-muted' : ''}">${courseGrade(course.id) === null ? '--' : `${courseGrade(course.id).toFixed(1)}%`}</div></td><td>${activeWeight ? `${activeWeight}% of course` : '--'}<div class="grade-bar"><span style="width:${Math.min(activeWeight, 100)}%"></span></div></td><td>${categories}</td><td>${mine.filter(item => item.status !== 'done').length}</td></tr>`; }).join('')}</tbody></table></div></div>`;
   document.querySelector('#gradeAdd').addEventListener('click', () => openAssignment());
 }
+function weeklyCourseBreakdown() {
+  const weekStart = new Date(today); weekStart.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+  const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 6);
+  const entries = logs.filter(log => {
+    const logDate = new Date(`${log.date}T12:00:00`);
+    return logDate >= weekStart && logDate <= weekEnd;
+  });
+  const totals = courses.map(course => ({
+    course,
+    hours: entries.filter(log => log.course === course.id).reduce((sum, log) => sum + Number(log.hours), 0)
+  })).filter(item => item.hours > 0).sort((a, b) => b.hours - a.hours);
+
+  if (!totals.length) return { total: 0, segments: [] };
+
+  const totalHours = totals.reduce((sum, item) => sum + item.hours, 0);
+  let cumulative = 0;
+  const gradient = totals.map(item => {
+    const start = cumulative;
+    const end = cumulative + (item.hours / totalHours) * 100;
+    cumulative = end;
+    return `${item.course.color} ${start}% ${end}%`;
+  }).join(', ');
+
+  return { total: totalHours, segments: totals, gradient: `conic-gradient(${gradient})` };
+}
 function renderTimesheet() {
   const total = logs.reduce((sum, item) => sum + Number(item.hours), 0);
   const weekStart = new Date(today); weekStart.setDate(today.getDate() - ((today.getDay() + 6) % 7));
   const days = Array.from({ length: 7 }, (_, index) => { const date = new Date(weekStart); date.setDate(weekStart.getDate() + index); const key = date.toISOString().slice(0, 10); return { key, label: date.toLocaleDateString('en-US', { weekday: 'short' }), hours: logs.filter(item => item.date === key).reduce((sum, item) => sum + Number(item.hours), 0) }; });
   const max = Math.max(...days.map(day => day.hours), 2);
-  app.innerHTML = `<div class="page">${header('Study rhythm', 'Time sheet', 'Log the work behind the grades. A small, honest record makes uneven weeks visible before they become stressful.', '<button class="button primary" id="timeAdd">+ Log time</button>')}<div class="time-summary"><div class="time-total"><div class="stat-label">All logged time</div><strong>${total.toFixed(1)}h</strong></div><div class="time-total"><div class="stat-label">This week</div><strong>${days.reduce((sum, day) => sum + day.hours, 0).toFixed(1)}h</strong></div></div><div class="section-head"><h2>Monday-Sunday</h2></div><div class="bar-chart">${days.map(day => `<div class="bar-day"><span class="bar-hours">${day.hours ? `${day.hours}h` : ''}</span><div class="bar-fill" style="height:${Math.max(day.hours / max * 125, 3)}px"></div><span>${day.label}</span></div>`).join('')}</div><div class="section-head" style="margin-top:34px"><h2>Recent entries</h2><span class="source-note">${logs.length} total logs</span></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Class</th><th>Focus</th><th>Hours</th><th>Note</th><th></th></tr></thead><tbody>${logs.slice().sort((a, b) => b.date.localeCompare(a.date)).map(log => { const course = courseById(log.course); return `<tr><td>${formatDue(log.date)}</td><td><span class="log-course"><i class="course-dot" style="background:${course.color};display:inline-block;margin-right:7px"></i>${course.code}</span></td><td>${log.kind}</td><td><b>${Number(log.hours).toFixed(2)}h</b></td><td>${log.note || '--'}</td><td><button class="delete-button" data-log="${log.id}" aria-label="Delete log">×</button></td></tr>`; }).join('') || '<tr><td colspan="6" class="empty">No time logged yet.</td></tr>'}</tbody></table></div></div>`;
+  const split = weeklyCourseBreakdown();
+  const pieChart = split.segments.length ? `<div class="time-pie-wrap"><div class="pie-chart" style="background:${split.gradient}"><div class="pie-center"><strong>${split.total.toFixed(1)}h</strong><span>this week</span></div></div><div class="pie-legend">${split.segments.map(item => `<div class="legend-item"><span class="legend-swatch" style="background:${item.course.color}"></span><div><strong>${item.course.code}</strong><span>${item.hours.toFixed(1)}h</span></div></div>`).join('')}</div></div>` : `<div class="empty-pie">No time logged this week yet.</div>`;
+
+  app.innerHTML = `<div class="page">${header('Study rhythm', 'Time sheet', 'Log the work behind the grades. A small, honest record makes uneven weeks visible before they become stressful.', '<button class="button primary" id="timeAdd">+ Log time</button>')}<div class="time-summary"><div class="time-total"><div class="stat-label">All logged time</div><strong>${total.toFixed(1)}h</strong></div><div class="time-total"><div class="stat-label">This week</div><strong>${days.reduce((sum, day) => sum + day.hours, 0).toFixed(1)}h</strong></div></div><div class="time-pie-panel">${pieChart}</div><div class="section-head"><h2>Monday-Sunday</h2></div><div class="bar-chart">${days.map(day => `<div class="bar-day"><span class="bar-hours">${day.hours ? `${day.hours}h` : ''}</span><div class="bar-fill" style="height:${Math.max(day.hours / max * 125, 3)}px"></div><span>${day.label}</span></div>`).join('')}</div><div class="section-head" style="margin-top:34px"><h2>Recent entries</h2><span class="source-note">${logs.length} total logs</span></div><div class="table-wrap"><table><thead><tr><th>Date</th><th>Class</th><th>Focus</th><th>Hours</th><th>Note</th><th></th></tr></thead><tbody>${logs.slice().sort((a, b) => b.date.localeCompare(a.date)).map(log => { const course = courseById(log.course); return `<tr><td>${formatDue(log.date)}</td><td><span class="log-course"><i class="course-dot" style="background:${course.color};display:inline-block;margin-right:7px"></i>${course.code}</span></td><td>${log.kind}</td><td><b>${Number(log.hours).toFixed(2)}h</b></td><td>${log.note || '--'}</td><td><button class="delete-button" data-log="${log.id}" aria-label="Delete log">×</button></td></tr>`; }).join('') || '<tr><td colspan="6" class="empty">No time logged yet.</td></tr>'}</tbody></table></div></div>`;
   document.querySelector('#timeAdd').addEventListener('click', () => document.querySelector('#timeDialog').showModal());
   document.querySelectorAll('[data-log]').forEach(button => button.addEventListener('click', () => { logs = logs.filter(log => log.id !== button.dataset.log); deleteShared('time_logs', button.dataset.log); save(); }));
 }
